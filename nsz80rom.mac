@@ -1,0 +1,1529 @@
+;Copyright 2024 Todd Markley
+;
+;Redistribution and use in source and binary forms, with or without modification,
+;are permitted provided that the following conditions are met:
+;
+;1. Redistributions of source code must retain the above copyright notice, this list
+;   of conditions and the following disclaimer.
+;
+;2. Redistributions in binary form must reproduce the above copyright notice, this list
+;   of conditions and the following disclaimer in the documentation and/or other materials
+;   provided with the distribution.
+;
+;THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS
+;OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+;MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+;COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+;EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+;GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+;AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+;NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+;ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+;
+;
+; This code has Jump Routing where each routable lable includes routing number
+; The "Rxx" routing part is a two digit hex value.
+; The upper bits of the routing number identify the coarse section that will
+; use the lower bits to jump to the exact location.
+; The E register will be used for jump routing and contains the location code.
+; All routing section labels start with "RTE".
+;ORG     0000   ; The labels for the data section depend on zero org
+                LD      HL,0000H        ;Zero A, (021H 0000H )
+                LD      IX,0000H        ;Zero IX, (0DD21H 0000H )
+                JR      START           ;Skip data (018H xx)
+;Data section (org+9)
+;   12345678901234567890123456789012345678901234567890123456789012345678   9   0   1
+DHELP:
+DB 'Boot Map Test Edit Fill Go Disp Loop Intel-hex',0DH,0AH,00H;
+DSTRT:
+DB 'Start@',00H;
+DEND:
+DB 'End@',00H;
+DPRMT:
+DB ')>',00H;
+DVAL:
+DB 'Val:',00H;
+DJMP:
+DB 'Addr:',00H;
+DGT:
+DB '>',00H;
+DERR:
+DB 0DH,0AH,'ERR@',00H;
+DPAS:
+DB 'PASS:',00H;
+;End of data section
+;Search usage: HL=BeginingAddr IX=DataAddr A=tmp DE=tmpAdr BC=tmp
+START0:         INC     HL              ;Next search location
+                INC     IX              ;Keep IX=HL
+                LD      A,H             ;Test for end of memory
+                CP      0FFH            
+                JR      NZ,START        ;MSB not end?
+                LD      A,L             ;Test LSB
+                CP      0FFH
+                JR      Z,FIXEDSP       ;At END? Give up search
+
+START:          LD      A,(HL)          ;Search for location of this ROM code
+                CP      021H            ;Test 1st byte
+                JR      NZ,START0       ;Loction match? No=Next_Loc
+                LD      D,H             ;Copy HL to DE
+                LD      E,L
+                INC     DE              ;Loc+1
+                LD      A,(DE)          ;Test 2nd byte
+
+                JR      NZ,START0       ;Fail? Next Loc
+                INC     DE              ;Loc+2
+                LD      A,(DE)          ;Test 3rd byte
+                CP      00H             ;Loc+2 test
+                JR      NZ,START0       ;Fail? Next Loc
+                INC     DE              ;Loc+3
+                LD      A,(DE)          ;Test 4th byte
+                CP      0DDH            ;Loc+3 test
+                JR      NZ,START0       ;Fail? Next Loc
+                INC     DE              ;Loc+4
+                LD      A,(DE)          ;Test 4th byte
+                CP      021H            ;Loc+4 test
+                JR      NZ,START0       ;Fail? Next Loc
+                LD      B,H
+                LD      C,L
+
+; The search for a good SP location was taking up too much space!
+; Switch to a fixed address
+FIXEDSP:         LD      SP,00FFH   ; Assume first page is valid memory
+                 LD      IY,00FFH   ; If not, we don't use SP anyway
+
+; Init hardware
+START1:         DI                      ;Interrupts off
+                LD      A,14H           ;Disarm left tx
+                OUT     (06H),A
+                LD      A,16H           ;Disarm left rcv
+                OUT     (06H),A
+                LD      A,1CH           ;Disarm right tx
+                OUT     (06H),A
+                LD      A,1EH           ;Disarm right rcv
+                OUT     (06H),A
+
+                LD      B,0H            ;Clr B
+INIW1:          DJNZ    INIW1           ;Wait .8 ms
+
+                XOR     A              ;initalize ports
+                OUT     (05H),A        ;Stop port from xmiting during reset
+                OUT     (03H),A        ;Both crt and 2nd port
+                OUT     (06H),A        ;CLR motherboard
+                OUT     (06H),A        ;Repeat-Why you ask??Because north star did it...
+                LD      A,0CEH         ;RESET:stops,clock,#bits,parity
+                OUT     (03H),A        ;send to first port
+                LD      A,0CEH         ;RESET:stops,clock,#bits,parity
+                OUT     (05H),A        ;send to second port
+                LD      A,37H          ;CMD: rts, er, rxf, dtr, txen
+                OUT     (03H),A        ;send to first
+                LD      A,37H          ;CMD: rts, er, rxf, dtr, txen
+                OUT     (05H),A        ;send to second
+                IN      A,(02H)        ;clear first port input buffer
+                IN      A,(04H)        ;clear second port input buffer
+
+                LD      B,0H           ;Set up delay for reset pulse
+DJ2:            DJNZ    DJ2            ;Wait .8ms
+                LD      E,12H          ;Route P16H next
+                LD      D,023H         ;->GCMDR23 return route
+                JR      RTE0           ;Done
+;------------------------------------------------------------ END INIT
+; A=Temp C=char_to_output D=ReturnRoute E=ActiveRouting
+;COUT=CharacterOUT
+COUTR00:        IN      A,(03H)        ;Get status byte
+                AND     01             ;Mask output status bit
+                JR      Z,COUTR00      ;Try again until ready
+                LD      A,C            ;Move char to send
+                OUT     (02H),A        ;Send char
+                LD      E,D            ;Return route code
+                JR      RTE0           ;Done
+
+;------------------------------------------------------------
+; A/B/C=Temp HL->String D=ReturnRoute E=ActiveRoute
+; Print the string HL points to, NULL terminated
+;SOUT=StringOUT
+SOUTR01:        LD      C,(HL)         ;Get next char
+                INC     HL             ;Inc str pointer
+                SUB     A              ;Zero A
+                CP      C              ;Test char for NULL End of string
+                JR      Z,SOUTR02      ;Done?
+SOUT001:        IN      A,(03H)        ;Get status
+                AND     01H            ;Mask output stat bit
+                JR      Z,SOUT001      ;Again until ready
+                LD      A,C
+                OUT     (02H),A        ;Send
+                JR      SOUTR01        ;Next char
+SOUTR02:        LD      E,D            ;Get return route
+                JR      RTE0           ;Done
+
+;------------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;->R0 A=Temp E=RouteCode
+RTE0:           LD      A,E            ;Move route code into A
+                AND     0F0H           ;Mask off upper bits
+                CP      00H            ;Is this the right section?
+                JR      NZ,RTE1DN      ;No, route it down to next
+                LD      A,E            ;Restore the route code in A
+                CP      000H           ;Test
+                JR      Z,COUTR00      ;Match jump?
+                CP      001H           ;Test
+                JR      Z,SOUTR01      ;Match jump?
+                CP      002H           ;Test
+                JR      Z,SOUTR02      ;Match jump?
+;                CP      003H           ;Test
+;                JR      Z,DMPR03
+                HALT                   ;Should not happen, invalid RTE code
+
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;------------------------------------------------------------
+; DEBUG (DBG) Save registers and print values (Assumes RAM)
+;DMPR03:
+;                LD     (0FA01H),A
+;                LD     (0FA02H),BC
+;                LD     (0FA04H),DE
+;                LD     (0FA06H),HL
+;                LD     (0FA08H),IX
+;                LD     (0FA0AH),IY
+;                LD     (0FA0CH),SP
+;
+;                EX     AF,AF'
+;                LD     (0FA11H),A
+;                EX     AF,AF'
+;                EXX
+;                LD     (0FA12H),BC
+;                LD     (0FA14H),DE
+;                LD     (0FA16H),HL
+;                LD     (0FA18H),IX
+;                LD     (0FA1AH),IY
+;                LD     (0FA1CH),SP
+;                EXX
+;                HALT
+;------------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE0UP:         JR      RTE0           ;Routing bounce up
+RTE1DN:         JR      RTE1           ;Routing bounce down
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;------------------------------------------------------------
+; A=Temp D=ReturnRoute C=HexValue/returnHexChar E=ActiveRoute
+; Convert HEX value into Hex char
+;CHEX=Convert from binary nibble to HEX ASCII char
+CHEXR10:        LD      A,C            ;Move value to A
+                AND     0FH            ;Mask nibble
+                CP      0AH            ;Test for A-F
+                JR      Z,CHEX01       ;Jump if letter
+                CP      0BH            ;Test for A-F
+                JR      Z,CHEX01       ;Jump if letter
+                CP      0CH            ;Test for A-F
+                JR      Z,CHEX01       ;Jump if letter
+                CP      0DH            ;Test for A-F
+                JR      Z,CHEX01       ;Jump if letter
+                CP      0EH            ;Test for A-F
+                JR      Z,CHEX01       ;Jump if letter
+                CP      0FH            ;Test for A-F
+                JR      Z,CHEX01       ;Jump if letter
+                ADD     A,'0'          ;Convert number to ASCII digit
+                JR      CHEX02
+CHEX01:         ADD     A,037H         ;Convert for ASCII char A-F
+CHEX02:         LD      C,A            ;Return char in C
+                LD      E,D            ;Set rtn route
+                JR      RTE1           ;Done
+
+;------------------------------------------------------------
+; A/B/C=Temp  HL=HexValue2Print  E=ActiveRoute D=ReturnRoute
+P16HR11:
+                IN     A,(03H)        ;Get out status
+                AND    01H            ;Mask out bit
+                JR     Z,P16HR11      ;Try again until ready
+                LD     A,0DH          ;CR
+                OUT    (02H),A        ;Send
+P16HEX2:        IN     A,(03H)        ;Get out status
+                AND    01H            ;Mask out bit
+                JR     Z,P16HEX2      ;Try again until ready
+                LD     A,0AH          ;LF
+                OUT    (02H),A        ;Send
+P16HR12:                              ;Enter here to skip CRLF
+                LD      A,H            ;Upper half first
+                RR      A
+                RR      A              ;Shift right 4 for just 4 bits, or 1 hex digit
+                RR      A
+                RR      A
+                LD      B,D            ;Copy return route to B
+                LD      D,013H         ;Rtn route
+                LD      C,A
+P16HEX4:        JR      CHEXR10        ;Convert to char (direct)
+P16HR13:
+                IN      A,(03H)        ;Get status
+                AND     01H            ;Mask out bit
+                JR      Z,P16HR13      ;Try again until ready
+                LD      A,C            ;Move char to A
+                OUT     (02H),A        ;Send
+                LD      C,H            ;Setup char
+                LD      D,014H         ;Rtn route
+P16HEX6:        JR      P16HEX4        ;->CHEXR10 Convert to char (direct)
+P16HR14:        IN      A,(03H)        ;Get status
+                AND     01H            ;Mask out bit
+                JR      Z,P16HR14      ;Try again until ready
+                LD      D,B            ;Restore rtn route
+                LD      A,C            ;Move char to A
+                OUT     (02H),A        ;Send it
+                JR      P8HR18         ; Drop through into P8H below
+;------------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;->R2 A=Temp E=RouteCode
+RTE1:           LD      A,E            ;Move route code into A
+                AND     0F0H           ;Mask off upper bits
+                CP      00H            ;right section up?
+                JR      Z,RTE0UP       ;No, route it
+                CP      10H            ;Is this the right section?
+                JR      NZ,RTE2DN      ;No, route it down to next
+                LD      A,E            ;Restore the route code in A
+                CP      010H           ;Test
+                JR      Z,P16HEX6      ;->CHEXR10 Match jump?
+                CP      011H           ;Test
+                JR      Z,P16HR11      ;Match jump?
+                CP      012H           ;Test
+                JR      Z,P16HR12      ;Match jump?
+                CP      013H           ;Test
+                JR      Z,P16HR13      ;Match jump?
+                CP      014H           ;Test
+                JR      Z,P16HR14      ;Match jump?
+                CP      018H           ;Test
+                JR      Z,P8HR18       ;Match jump?
+                CP      019H           ;Test
+                JR      Z,P8HR19       ;Match jump?
+                CP      01AH           ;Test
+                JR      Z,P8HR1A       ;Match jump?
+                HALT
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;------------------------------------------------------------
+; A/B/H=Temp L=ByteValue D=ReturnRoute E=ActiveRoute
+P8HR18:         LD      B,D            ;Save our return route in B
+                LD      A,L
+                RR      A
+                RR      A              ;Shift right 4 for just 4 bits, or 1 hex digit
+                RR      A
+                RR      A
+                LD      D,019H         ;Return route
+                LD      C,A            ;Setup 
+P8HEX0:         JR      P16HEX6        ;->CHEXR10 Convert to char (direct)
+
+P8HR19:         IN      A,(03H)        ;Get status
+                AND     01H            ;Mask out bit
+                JR      Z,P8HR19       ;Try again until ready
+                LD      A,C            ;Char in A
+                OUT     (02H),A        ;Send
+
+                LD      C,L            ;Lower nibble
+                LD      D,01AH         ;Rtn route
+                JR      P8HEX0         ;->CHEXR10 Convert to char (direct)
+P8HR1A:         IN      A,(03H)        ;Get status
+                AND     01H            ;Mask out bit
+                JR      Z,P8HR1A       ;Try again until ready
+                LD      A,C            ;Char in A
+                OUT     (02H),A        ;Send
+                LD      E,B            ;Set route
+                JR      RTE1           ;Done
+;-----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE2DN:         JR      RTE2
+RTE1UP:         JR      RTE1
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;-----------------------------------------------------------
+; A/B=Temp D=RtnRoute E=ActiveRoute
+;CRLF=print-CR-LF
+CRLFR20:        IN      A,(03H)        ;Get status
+                AND     01H            ;Mask out bit
+                JR      Z,CRLFR20      ;Try again until ready
+                LD      A,0DH          ;CR
+                OUT     (02H),A        ;Send
+CRLFR21:        IN      A,(03H)        ;Get status
+                AND     01H            ;Mask out bit
+                JR      Z,CRLFR21      ;Try again until ready
+                LD      A,0AH          ;CR
+                OUT     (02H),A        ;Send
+                LD      E,D            ;Set route
+CRLFR22:        JR      RTE2           ;Done
+;-----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;->R2 A=Temp E=RouteCode
+RTE2:           LD      A,E            ;Move route code into A
+                AND     0E0H           ;Mask off upper bits
+                CP      00H            ;right section up?
+                JR      Z,RTE1UP       ;No, route it
+                LD      A,E            ;Move route again into A
+                AND     0F0H           ;Mask off upper bits
+                CP      20H            ;Is this the right section?
+                JR      NZ,RTE3DN1     ;No, route it down to next
+                LD      A,E            ;Restore the route code in A
+                CP      020H           ;Test
+                JR      Z,CRLFR20      ;Match jump?
+                CP      021H           ;Test
+                JR      Z,CRLFR21      ;Match jump?
+                CP      022H           ;Test
+                JR      Z,CRLFR22      ;Match jump?
+                CP      023H           ;Test
+                JR      Z,GCMDR23      ;Match jump?
+                CP      024H           ;Test
+                JR      Z,GCMDR24      ;Match jump?
+                CP      025H           ;Test
+                JR      Z,GCMDR25      ;Match jump?
+                CP      026H           ;Test
+                JR      Z,GCMDR26      ;Match jump?
+                CP      027H           ;Test
+                JR      Z,GCMDR27      ;Match jump?
+                HALT                   ;Should not happen, invalid RTE code
+
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;------------------------------------------------------------
+; A/B/C/D/E/HL/SP=Temp
+;GCMD=GetCommand
+GCMDR23:
+                LD      D,024H         ;ReturnRoute
+                LD      E,020H         ;->CRLFR20
+                JR      RTE2           ;CR-LF out
+GCMDR24:
+                LD      SP,IX          ;Data org pointer
+                LD      HL,DPRMT       ;Offset to string
+                ADD     HL,SP          ;
+                LD      SP,IY          ;Reset SP for any command that expects it
+                LD      E,01H          ;->SOUTR01
+                LD      D,25H          ;ReturnRoute
+                JR      RTE2           ;->SOUTR01 Print message
+GCMDR25:
+                IN      A,(03H)        ;Get status byte
+                AND     02             ;Mask input status bit
+                JR      Z,GCMDR25      ;try again if no chr found with Z=true
+                IN      A,(02H)        ;Get chr
+                AND     07FH           ;Mask off parity bit
+                LD      H,A            ;Move char to H
+                LD      C,A            ;Move char to C
+                LD      D,026H         ;ReturnRoute
+                LD      E,00H          ;->COUTR00
+                JR      RTE2
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE2UP1:         JR      RTE2
+RTE3DN1:         JR      RTE3DN
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;-----------------------------------------------------------
+GCMDR26:
+                LD      D,027H         ;ReturnRoute
+                LD      E,020H         ;->CRLFR20
+                JR      RTE2           ;CR-LF out
+GCMDR27:
+                LD      A,H            ;Restore char again
+                CP      '?'
+                JR      NZ,GCMD01      ;No, then skip
+GCMD00:         LD      HL,DHELP       ;String offset
+                LD      SP,IX          ;
+                ADD     HL,SP          ;Build string pointer in HL
+                LD      D,023H         ; ReturnRoute index
+                LD      E,01H          ;->SOUTR01
+                JR      RTE2UP1        ;->SOUTR01 Print help message
+            
+GCMD01:
+                CP      ':'            ;Intel-HEX start char
+                LD      E,07FH         ;->IHEXR78  Intel-Hex
+                JR      Z,RTE3DN1
+
+                AND     05FH           ;Convert from lower to upper
+                CP      'I'
+                LD      E,078H         ;->IHEXR78  Intel-Hex
+                JR      Z,RTE3DN1
+                CP      'H'
+                JR      Z,GCMD00       ;->PNTHLP
+                CP      'G'
+                LD      E,050H         ;->GOTOR50  Goto address
+                JR      Z,RTE3DN1
+                CP      'D'
+                LD      E,047H         ;->DISPR47 Diaplay memory
+                JR      Z,RTE3DN1
+                CP      'L'
+                LD      E,052H         ;->LOOPR52 Test_Debug
+                JR      Z,RTE3DN1
+                CP      'B'
+                JP      Z,0E800H       ;Boot disk
+                CP      'F'
+                LD      E,043H         ;->FILLR43
+                JR      Z,RTE2UP
+                CP      'E'
+                LD      E,054H         ;->EDITR54
+                JR      Z,RTE2UP
+                CP      'T'
+                LD      E,070H         ;->TESTR70
+                LD      D,023H         ;->GCMDR23
+                JR      Z,RTE2UP
+       
+                CP      'M'
+                LD      E,060H         ;Route ->MAPR60
+                JR      Z,RTE3DN
+
+       
+                LD      E,023H         ;->GCMDR23
+                JR      RTE2UP         ;Start over
+
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE2UP:         JR      RTE2UP1
+RTE3DN:         JR      RTE3
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;-----------------------------------------------------------
+; A/B/C=Temp D=ReturnRoute E=ActiveRoute B=ReturnValue
+; Known bug: Some invalid input like 'G', ':', or 'h' will convert incorrectly
+; The upper nibble of 30H assumes 0-9, but other chars will match
+; For example ';'=B, '<'=C, '='=D, '>'=E, '?'=F
+; It saves space to ignore this bug
+;GHEX=Get a single ASCII HEX digit from console and return a binary nibble value
+GHEXR30:
+                IN      A,(03H)        ;Get status byte
+                AND     02             ;Mask in status bit
+                JR      Z,GHEXR30      ;Again if not ready
+                IN      A,(02H)        ;Get char
+                AND     07FH           ;Mask off parity bit
+                LD      C,A            ;Save char in C
+                                       ;Avoid using COUTR00 becuase of nesting
+GETHX1:         IN      A,(03H)        ;Get status byte
+                AND     01             ;Mask out status bit
+                JR      Z,GETHX1       ;Again if not ready
+                LD      A,C            ;Restore char in A
+                OUT     (02H),A        ;Echo typed char
+                AND     070H           ;Mask off upper nibble
+                CP      030H           ;Test for number 0-9
+                JR      NZ,GETHX3      ;Is it a number? No-Jump to letter test
+                LD      A,C            ;Restore number in A
+                AND     0FH            ;Mask off lower nibble for value
+                JR      GETHX5         ;Done
+GETHX3:         CP      040H           ;Test for upper case letter
+                JR      Z,GETHX4       ;Is it a upper case letter?
+                CP      060H           ;Test for lower case letter
+                JR      Z,GETHX4       ;Is it a lower case letter?
+GETHX3E:        LD      E,023H         ;->GCMDR23
+                JR      RTE3           ;Abort, invalid input
+
+GETHX4:         LD      A,C            ;Restore letter to A
+                AND     0FH            ;Mask lower nibble of letter
+                ADD     A,09H          ;Convert to value
+GETHX5:         LD      B,A            ;Return value in B
+                AND     0F0H           ;Mask upper bits to check for error
+                JR      NZ,GETHX3E     ;Is this more then 0FH? ERROR OUT!
+                LD      A,C
+                CP      ':'            ;Check for ':' to avoid Intel-HEX conflict
+                JR      Z,GETHX3E
+GETHX6:         
+                LD      E,D            ;Return route
+                JR      RTE3           ;Done
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;->R3 A=Temp E=RouteCode
+RTE3:           LD      A,E            ;Move route code into A
+                AND     0F0H           ;Mask off upper bits
+                CP      030H           ;Test for ours
+                JR      Z,RTE3A        ;Ours? Yes keep it.
+                AND     0C0H           ;Mask off bits for less test
+                CP      00H            ;right section up?
+                JR      Z,RTE2UP       ;No, route it down to next
+                JR      RTE4DN1        ;Else go down
+RTE3A:          LD      A,E            ;Restore the route code in A
+                CP      030H           ;Test
+                JR      Z,GHEXR30      ;Match jump?
+                CP      031H           ;Test
+                JR      Z,G16HR31      ;Match jump?
+                CP      032H           ;Test
+                JR      Z,G16HR32      ;Match jump?
+                CP      033H           ;Test
+                JR      Z,G16HR33      ;Match jump?
+                CP      034H           ;Test
+                JR      Z,G16HR34      ;Match jump?
+                CP      035H           ;Test
+                JR      Z,G16HR35      ;Match jump?
+                CP      036H           ;Test
+                JR      Z,G16HR36      ;Match jump?
+                CP      037H           ;Test
+                JR      Z,G8HR37       ;Match jump?
+                CP      038H           ;Test
+                JR      Z,G8HR38       ;Match jump?
+                CP      039H           ;Test
+                JR      Z,G8HR39       ;Match jump?
+                CP      03AH           ;Test
+                JR      Z,G8HR3A       ;Match jump?
+                CP      03BH           ;Test
+                JR      Z,G8HR3B       ;Match jump?
+                HALT
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;----------------------------------------------------------
+; A/B/C/D=Temp HL=Pointer_to_prompt/Return_value E=ReturnRoute
+G16HR31:
+                LD      A,D            ;Save org D in A'
+                EX      AF,AF'
+                LD      E,01H          ;->SOUTR01
+                LD      D,033H         ;Retern route
+                JR      RTE3           ;Send prompt
+G16HR32: ; Enter here to skip prompt
+                LD      A,D            ;Save org D in A'
+                EX      AF,AF'
+G16HR33:
+                LD      E,030H         ;->GHEXR30
+                LD      D,034H         ;Retern route
+                JR      RTE3           ;Get user HEX input
+G16HR34:
+                LD      A,B            ;Move value to A
+                RL      A              ;Left shift to nibble to msb
+                RL      A
+                RL      A
+                RL      A
+                AND     0F0H           ;Mask only upper nibble
+                LD      H,A            ;Save in H
+                LD      E,030H         ;->GHEXR30
+                LD      D,035H         ;Retern route
+                JR      RTE3           ;Get user HEX input
+G16HR35:
+                LD      A,B            ;Move value to A
+                AND     0FH            ;Mask lower only nibble
+                ADD     A,H            ;Add to H for full upper byte
+                LD      H,A            ;Result into H
+G16HR36:        JR      G8HR39
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE3UP1:        JR      RTE3
+RTE4DN1:        JR      RTE4DN
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;----------------------------------------------------------
+; A/B/D=Temp HL=Pointer_to_prompt L=Return_value D=ReturnRoute
+;G8H-Get Hex byte
+G8HR37:
+                LD      A,D            ;Save rtn route D into A'
+                EX      AF,AF'
+                LD      E,01H          ;->SOUTR01
+                LD      D,039H         ;Retern route
+                JR      RTE3UP1        ;Send prompt
+G8HR38: ; Enter here to skip prompt
+                LD      A,D            ;Save org E in A'
+                EX      AF,AF'         ;Recover old E=ReturnRoute from A'
+G8HR39:
+                LD      E,030H         ;->GHEXR30
+                LD      D,03AH         ;Retern route
+                JR      RTE3UP1        ;Get user HEX input
+
+G8HR3A:
+                LD      A,B            ;Move value to A
+                RL      A              ;Left shift to nibble to msb
+                RL      A
+                RL      A
+                RL      A
+                AND     0F0H           ;Mask only upper nibble
+                LD      L,A            ;Save in L
+                LD      E,030H         ;->GHEXR30
+                LD      D,03BH         ;Retern route
+                JR      RTE3UP1        ;Get user HEX input
+G8HR3B:
+                LD      A,B            ;Move value to A
+                AND     0FH            ;Mask lower only nibble
+                ADD     A,L            ;Add to L for full byte
+                LD      L,A            ;Result into L
+
+                EX      AF,AF'         ;Recover old D=ReturnRoute from A'
+                LD      E,A            ;Move route to E
+                AND     0F0H           ;Mask upper nibble only
+                CP      070H           ;Called from Intel-HEX?
+                JR      Z,RTE3UP       ;Done
+
+GET8H4:         IN      A,(03H)        ;Get status byte
+                AND     01             ;Mask out bit
+                JR      Z,GET8H4       ;Loop if not ready
+                LD      A,0DH          ;CR
+                OUT     (02H),A        ;Send
+GET8H6:         IN      A,(03H)        ;Get status byte
+                AND     01             ;Mask out bit
+                JR      Z,GET8H6       ;Loop if not ready
+                LD      A,0AH          ;LF
+                OUT     (02H),A        ;Send
+
+                JR      RTE3UP         ;Done
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE3UP:         JR      RTE3UP1
+RTE4DN:         JR      RTE4
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;-----------------------------------------------------------
+; A/BC/E/D/HL/A'=Temp HL'=StartAddr BC'=EndAddr D'=ReturnRoute
+;Get start address and end address returned in HL' & BC'
+;GADDR=Get start & end Addresses, return in HL' & BC'
+GADDR40:
+                LD      SP,IX          ;Data org pointer
+                LD      HL,DSTRT       ;String offset
+                ADD     HL,SP          ;
+                LD      SP,IY          ;Reset SP for any code that expects it
+                LD      D,041H         ;ReturnRoute
+                LD      E,031H         ;->G16HR31
+                JR      RTE4           ;Print prompt & get start address
+GADDR41:        ; Without RAM or SP we can use the BC' DE' & HL' registers for data
+                LD      A,H
+                EXX  ;Active 1
+                LD      H,A
+                EXX  ;Active 0
+                LD      A,L
+                EXX  ;Active 1
+                LD      L,A
+                EXX  ;Active 0
+                LD      SP,IX          ;Data org pointer
+                LD      HL,DEND        ;String offset
+                ADD     HL,SP          ;
+                LD      SP,IY          ;Reset SP for any code that expects it
+                LD      D,042H         ;ReturnRoute
+                LD      E,031H         ;->G16HR31
+                JR      RTE4           ;Print prompt & get end address
+GADDR42:        ; Without RAM or SP we can use the BC' DE' & HL' registers for data
+                LD      A,H
+                EXX  ;Active 1
+                LD      B,A
+                EXX  ;Active 0
+                LD      A,L
+                EXX  ;Active 1
+                LD      C,A
+                LD      A,D            ;Move return route to A
+                EXX  ;Active 0
+                LD      E,A            ;Set current return route
+                JR      RTE4           ;Done
+;-----------------------------------------------------------
+; A/BC/E/D/HL/A'=Temp HL'=StartAddr BC'=EndAddr D'=ReturnRoute
+;FILL=FillMemory
+FILLR43:
+                EXX  ;Active 1
+                LD      D,044H         ;Return route
+                EXX  ;Active 0
+                JR      GADDR40        ;Get start & end
+FILLR44:
+                EXX  ;Active 1
+                LD      D,H            ;Set DE' copy of HL' START address
+                LD      E,L            ;This DE' copy is needed below
+                EXX  ;Active 0
+                LD      SP,IX          ;Data org pointer
+                LD      HL,DVAL       ;String offset
+                ADD     HL,SP          ;
+                LD      SP,IY          ;Reset SP for any code that expects it
+                LD      D,045H         ;ReturnRoute
+                LD      E,037H         ;->G8HR37
+                JR      RTE4           ;Print prompt & get value
+FILLR45:
+                LD      A,L            ;Value in A
+                EXX  ;Active 1
+FILLM1:         LD      (HL),A         ;Set location to value
+                SCF                    ;Clear carry flag
+                CCF                    ;and avoid unexpected SBC result
+                SBC     HL,BC          ;Test for end
+                JR      Z,FILLR46      ;If end quit
+                INC     DE             ;Next location
+                LD      H,D            ;Restore HL with current location in DE
+                LD      L,E
+                JR      FILLM1
+FILLR46:
+                EXX  ;Active 1
+                LD      E,023H         ;->GCMDR23
+                JR      RTE4
+
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;->R4 A=Temp E=RouteCode
+RTE4:           LD      A,E            ;Move route code into A
+                AND     0C0H           ;Mask off upper bits
+                CP      00H            ;less go up?
+                JR      Z,RTE3UP       ;Yes, route it
+                LD      A,E            ;Restore route code
+                AND     0F0H           ;Mask off upper bits
+                CP      040H            ;Is this the right section?
+                JR      NZ,RTE5DN1     ;No, route it down to next
+                LD      A,E            ;Restore the route code in A
+                CP      040H           ;Test
+                JR      Z,GADDR40      ;Match jump?
+                CP      041H           ;Test
+                JR      Z,GADDR41      ;Match jump?
+                CP      042H           ;Test
+                JR      Z,GADDR42      ;Match jump?
+                CP      043H           ;Test
+                JR      Z,FILLR43      ;Match jump?
+                CP      044H           ;Test
+                JR      Z,FILLR44      ;Match jump?
+                CP      045H           ;Test
+                JR      Z,FILLR45      ;Match jump?
+                CP      046H           ;Test
+                JR      Z,FILLR46      ;Match jump?
+                CP      047H           ;Test
+                JR      Z,DISPR47      ;Match jump?
+                CP      048H           ;Test
+                JR      Z,DISPR48      ;Match jump?
+                CP      049H           ;Test
+                JR      Z,DISPR49      ;Match jump?
+                CP      04AH           ;Test
+                JR      Z,DISPR4A      ;Match jump?
+                CP      04BH           ;Test
+                JR      Z,DISPV4B1     ;Match jump?
+                CP      04CH           ;Test
+                JR      Z,DISPV4C1     ;Match jump?
+                CP      04DH           ;Test
+                JR      Z,DISPV4D1     ;Match jump?
+                CP      04EH           ;Test
+                JR      Z,DISPV4E1     ;Match jump?
+                HALT
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;-----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE4UP1:       JR      RTE4
+RTE5DN1:       JR      RTE5DN2
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;-----------------------------------------------------------
+; A/BC/E/D/HL/A'/BC'/DE'/HL'=Temp
+;Display memory routine
+;DISP=DisplayMemory
+DISPR47:
+                EXX  ;Active 1
+                LD      D,048H         ;Return route
+                EXX  ;Active 0
+                LD      E,040H         ;->GADDR40 Route code
+                JR      RTE4           ;Get start & end
+DISPR48:
+                EXX ;Active 1
+                LD      A,H            ;MSB of START from H'
+                LD      D,A            ;Copy to D'
+                EXX ;Active 0
+                LD      H,A            ;MSB of START to H
+                EXX ;Active 1
+                LD      A,L            ;LSB of START from L'
+                LD      E,A            ;Copy to E'
+                EXX ;Active 0
+                LD      L,A            ;LSB of START to L
+
+                ;  BC'=END  DE'=HL'=START   address setup done
+                AND     0FH            ;Mask only LSB nibble
+                CP      0H             ;Check if start address end in hex zero
+                JR      Z,DISPM1       ;If ends with zero then skip this addr print
+                LD      E,020H         ;->CRLFR20
+                LD      D,049H         ;Return route
+                JR      RTE4UP1
+DISPR49:
+                LD      E,011H         ;->P16HR11
+                LD      D,04AH         ;Return route
+                JR      RTE4UP1
+DISPR4A:
+                IN      A,(03H)        ;Status
+                AND     01             ;Mask out bit
+                JR      Z,DISPR4A      ;Again until ready
+                LD      A,' '          ;Space
+                OUT     (02H),A        ;Send
+                JR      DISPM1
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE5DN2:        JR      RTE5DN3
+DISPV4B1:       JR      DISPR4B
+DISPV4C1:       JR      DISPR4C
+DISPV4D1:       JR      DISPR4D
+DISPV4E1:       JR      DISPR4E
+RTE4UP2:        JR      RTE4UP1
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;----------------------------------------------------------
+DISPM1:
+                ; Setup registers in 0 for subroutine calls
+                EXX ;Active 1           Copy current loc from HL' to HL
+                LD      A,H ; A = H'    MSB of current location
+                EXX ;Active 0
+                LD      H,A
+                EXX ;Active 1
+                LD      A,L ; A = L'    LSB of current location
+                EXX ;Active 0
+                LD      L,A
+                AND     0FH            ;Mask lower nibble
+                CP      00H            ;Check for start of line
+                JR      NZ,DISPR4C     ;Not start? Skip CR-LF P16H
+
+                IN      A,(03)         ;Get status once every line
+                AND     02H            ;Mask input bit
+                JR      Z,DISPM2       ;Continue?
+                IN      A,(02H)        ;Discard char
+                LD      E,023H         ;->GCMDR23 Route
+                JR      RTE4UP2        ;Abort display
+
+DISPM2:         LD      E,011H         ;->P16HR11
+                LD      D,04BH         ;Return route
+                JR      RTE4UP2
+DISPR4B:
+                LD      C,' '          ;Space
+                LD      E,00H          ;->COUTR00
+                LD      D,04CH         ;Return route
+                JR      RTE4UP2
+DISPR4C:
+                LD      A,(HL)         ;Get location value
+                LD      L,A            ;Put into L
+                LD      E,018H         ;->P8HR18
+                LD      D,04DH         ;Return route
+                JR      RTE4UP2
+DISPR4D:
+                LD      C,' '          ;Space
+                LD      E,00H          ;->COUTR00
+                LD      D,04EH         ;Return route
+                JR      RTE4UP2
+DISPR4E:
+                EXX ;Active 1
+                SCF                    ;Clear carry flag
+                CCF                    ;and avoid unexpected SBC result
+                SBC     HL,BC          ;Test for end
+                JR      Z,DISPM4       ;If end quit
+                INC     DE             ;Next DE' location
+                LD      H,D
+                LD      L,E            ;Restore HL' = DE'
+                EXX ;Active 0
+                JR      DISPM1         ;Loop back for next location
+DISPM4:
+                EXX ;Active 0
+                LD      E,023H         ;->GCMDR23
+                JR      RTE4UP2
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE4UP:         JR      RTE4UP2
+RTE5DN3:        JR       RTE5DN
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;-----------------------------------------------------------
+;A/BC/DE/HL=Temp
+;GOTO=GotoAddress
+GOTOR50:
+                LD      SP,IX          ;Data org pointer
+                LD      HL,DJMP       ;String offset
+                ADD     HL,SP          ;
+                LD      SP,IY          ;Reset SP for any code that expects it
+                LD      D,051H         ;ReturnRoute
+                LD      E,031H         ;->G16HR31 get jump address
+                JR      RTE5           ;Print prompt & get start address
+GOTOR51:
+                JP      (HL)           ;Address in HL - go!
+;----------------------------------------------------------
+;A/BC/DE/HL=Temp
+;LOOP=Loop_at_address
+;----------------------------------------------------------
+LOOPR52:
+                LD      SP,IX          ;Data org pointer
+                LD      HL,DSTRT       ;String offset
+                ADD     HL,SP          ;
+                LD      SP,IY          ;Reset SP for any code that expects it
+                LD      D,053H         ;ReturnRoute
+                LD      E,031H         ;->G16HR31 get jump address
+                JR      RTE5           ;Print prompt & get start address
+LOOPR53:
+                LD      BC,00H         ;Clear BC
+LOOP01:         LD      A,(HL)         ;Read from address
+                LD      (HL),A         ;Keep this address very active for testing
+                DJNZ    LOOP01
+                IN      A,(03)         ;Get status once every 255 loops
+                AND     02H            ;Mask input bit
+                JR      Z,LOOPR53      ;Again?
+                IN      A,(02H)        ;Discard char
+                LD      E,023H         ;->GCMDR23 Route
+                JR      RTE5
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE4UP3:        JR      RTE4UP
+RTE5DN:         JR       RTE5
+GOTOR50A:       JR      GOTOR50
+GOTOR51A:       JR      GOTOR51
+LOOPR52A:       JR      LOOPR52
+LOOPR53A:       JR      LOOPR53
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;----------------------------------------------------------
+;EDIT=EditMemory
+EDITR54:
+                LD      SP,IX          ;Data org pointer
+                LD      HL,DSTRT       ;String offset
+                ADD     HL,SP          ;
+                LD      SP,IY          ;Reset SP for any code that expects it
+                LD      D,055H         ;ReturnRoute
+                LD      E,031H         ;->G16HR31 get jump address
+                JR      RTE5           ;Print prompt & get start address
+EDITR55:
+                LD      A,H            ;Save copy of HL in HL'
+                EXX  ;Active 1
+                LD      H,A
+                EXX  ;Active 0
+                LD      A,L
+                EXX  ;Active 1
+                LD      L,A
+                EXX  ;Active 0
+                LD      D,056H         ;ReturnRoute
+                LD      E,012H         ;->P16HR12 Print current address
+                JR      RTE5           ;Route
+EDITR56:
+                LD      C,':'
+                LD      D,057H         ;ReturnRoute
+                LD      E,00H          ;->COUTR00 Print
+                JR      RTE5           ;Route
+EDITR57:
+                LD      A,(HL)         ;Current value
+                LD      L,A            ;Setup for print
+                LD      D,058H         ;ReturnRoute
+                LD      E,018H         ;->P8HR18 Print
+                JR      RTE5           ;Route
+EDITR58:
+                LD      SP,IX          ;Data org pointer
+                LD      HL,DGT         ;String offset
+                ADD     HL,SP          ;
+                LD      SP,IY          ;Reset SP for any code that expects it
+                LD      D,059H         ;ReturnRoute
+                LD      E,037H         ;->G8HR37 get new value
+                JR      RTE5           ;Print prompt & get start address
+EDITR59:
+                LD      B,L            ;New value in A
+                EXX  ;Active 1         ;Restore loc addr in HL
+                LD      A,H
+                EXX  ;Active 0
+                LD      H,A
+                EXX  ;Active 1
+                LD      A,L
+                EXX  ;Active 0
+                LD      L,A
+                LD      (HL),B         ;Change to new value
+                INC     HL             ;Next location
+                JR      EDITR55        ;Loop back
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;->R5 A=Temp E=RouteCode
+RTE5:           LD      A,E            ;Move route code into A
+                AND     0C0H           ;Mask off upper bits
+                CP      00H            ;3 or less go up?
+                JR      Z,RTE4UP3      ;Yes, less then 3, route it
+                LD      A,E            ;Restore route code
+                AND     0F0H           ;Mask off upper bits
+                CP      040H           ;4?
+                JR      Z,RTE4UP3      ;Yes, 4, route it
+                CP      050H           ;5?
+                JR      NZ,RTE6DN1     ;Route down
+                LD      A,E            ;Restore the route code in A
+                CP      050H           ;Test
+                JR      Z,GOTOR50A     ;Match jump?
+                CP      051H           ;Test
+                JR      Z,GOTOR51A     ;Match jump?
+                CP      052H           ;Test
+                JR      Z,LOOPR52A     ;Match jump?
+                CP      053H           ;Test
+                JR      Z,LOOPR53A     ;Match jump?
+                CP      054H           ;Test
+                JR      Z,EDITR54      ;Match jump?
+                CP      055H           ;Test
+                JR      Z,EDITR55      ;Match jump?
+                CP      056H           ;Test
+                JR      Z,EDITR56      ;Match jump?
+                CP      057H           ;Test
+                JR      Z,EDITR57      ;Match jump?
+                CP      058H           ;Test
+                JR      Z,EDITR58      ;Match jump?
+                CP      059H           ;Test
+                JR      Z,EDITR59      ;Match jump?
+                CP      05AH           ;Test
+                JR      Z,TST1R5A      ;Match jump?
+                HALT
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE5UP1:        JR      RTE5
+RTE6DN1:        JR      RTE6DN2
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;----------------------------------------------------------
+;A/DE/HL'=Temp    BC=END  HL=START  D/D'=ReturnRoute B=StatusOnRet
+; Return: BC'=FailedAddress
+;TST1=Test#1 Store lower nibble of each address in memory location then verify
+TST1R5A:
+                LD      A,D            ;Save copy of D in D'
+                EXX  ;Active 1
+                LD      D,A
+                EXX  ;Active 0
+                LD      A,H            ;Save copy of HL in HL'
+                EXX  ;Active 1
+                LD      H,A
+                EXX  ;Active 0
+                LD      A,L
+                EXX  ;Active 1
+                LD      L,A
+                EXX  ;Active 0
+TST1A:
+                EX      AF,AF'         ;A' = pass count
+                EXX  ;Active 1
+                LD      E,A
+                EX      AF,AF'         ;Normal
+                LD      A,E            ;Start with pass count
+                EXX  ;Active 0
+                ADD     A,L            ;Value of LSB (Test type #0)
+                ADD     A,H            ;Shift by MSB
+                LD      (HL),A         ;Save in memory
+
+                LD      D,H            ;Save HL addr in DE
+                LD      E,L
+                SCF                    ;Clear carry flag
+                CCF                    ;and avoid unexpected SBC result
+                SBC     HL,BC          ;Test for end
+                JR      Z,TST1C        ;end? Next step
+                LD      H,D            ;Restore HL from DE after SBC test
+                LD      L,E
+                INC     HL             ;Next loc
+                JR      TST1A          ;Loop back
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE5UP2:        JR      RTE5UP1
+RTE6DN2:        JR      RTE6DN
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;----------------------------------------------------------
+TST1C:
+                EXX  ;Active 1
+                LD      A,H            ;Restore HL from HL' to org START
+                EXX  ;Active 0
+                LD      H,A
+                EXX  ;Active 1
+                LD      A,L
+                EXX  ;Active 0
+                LD      L,A
+TST1E:
+                EXX  ;Active 1
+                LD      A,E            ;Start with pass count
+                EXX  ;Active 0
+                ADD     A,L            ;Add with LSB
+                ADD     A,H            ;Shift by MSB
+                CP      (HL)           ;Read memory and compare 
+                JR      NZ,TST1M       ;Error?
+                JR      TST20
+
+TST20:
+                LD      D,H            ;Save HL addr in DE
+                LD      E,L
+                SCF                    ;Clear carry flag
+                CCF                    ;and avoid unexpected SBC result
+                SBC     HL,BC          ;Test for end
+                JR      Z,TST1K        ;end? Return no errors
+                LD      H,D            ;Restore HL from DE after SBC test
+                LD      L,E
+                INC     HL             ;Next loc
+                JR      TST1E          ;Loop back
+TST1K:
+                EXX  ;Active 1
+                INC     E             ;INC pass counter
+                LD      A,H            
+                EXX  ;Active 0
+                LD      H,A           ;Restore HL to START
+                EXX  ;Active 1
+                LD      A,L           
+                EXX  ;Active 0
+                LD      L,A            ;
+                LD      B,00H          ;B=0 -> No errors
+TST1L:
+                EXX  ;Active 1
+                LD      A,D            ;Copy return route into A
+                EXX  ;Active 0
+                LD      E,A            ;Move return route into E
+                JR      RTE5UP         ;Done
+TST1M:        ; Error, compare failed
+                EXX  ;Active 1
+                LD      A,D            ;Copy return route into A
+                EXX  ;Active 0
+                LD      E,A            ;Move return route into E
+                LD      A,H            ;MSB of failed address
+                EXX  ;Active 1
+                LD      B,A            ;B' = MSB of failed address
+                LD      A,H            ;Restore HL with START from HL'
+                EXX  ;Active 0
+                LD      H,A
+                LD      A,L            ;LSB of failed address
+                EXX  ;Active 1
+                LD      C,A            ;C' = LSB of failed address
+                LD      A,L
+                EXX  ;Active 0
+                LD      L,A            ;
+                LD      B,01H          ;B=1 -> Errors
+                JR      TST1L          ;Setup reoute for return
+                HALT
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE5UP:         JR      RTE5UP2
+RTE6DN:         JR      RTE6
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;-----------------------------------------------------------
+RTE6:           LD      A,E            ;Move route code into A
+                AND     0C0H           ;Mask off upper bits
+                CP      00H            ;3 or less go up?
+                JR      Z,RTE5UP       ;Yes, less then 3, route it
+                LD      A,E            ;Restore route code
+                AND     0F0H           ;Mask off upper bits
+                CP      060H           ;6?
+                JR      Z,RTE6A        ;Yes us #6
+                CP      040H           ;4?
+                JR      Z,RTE5UP       ;Route up
+                CP      050H           ;5?
+                JR      Z,RTE5UP       ;Route up
+                JR      RTE7DN1
+RTE6A:          LD      A,E            ;Restore the route code in A
+                CP      060H           ;Test
+                JR      Z,MAPR60       ;Match jump?
+                CP      061H           ;Test
+                JR      Z,MAPR61       ;Match jump?
+;                CP      062H           ;Test
+;                JR      Z,MAPR62V       ;Match jump?
+;                CP      063H           ;Test
+;                JR      Z,MAPR63V       ;Match jump?
+   HALT
+;----------------------------------------------------------
+; This will use every register!
+;MAP=MapMemory
+MAPR60:
+                LD      HL,0000H      ;START
+MAPMEM1:        LD      D,H           ;Save START in DE
+                LD      E,L
+
+                LD      SP,IX          ;Data org pointer
+                LD      HL,00H         ;
+                ADD     HL,SP          ;HL=Our org
+                LD      SP,IY          ;Reset SP for any code that expects it
+                LD      B,H            ;Move org into BC
+                LD      C,L
+                LD      H,D            ;Restore HL=START
+                LD      L,E
+                SCF                    ;Clear carry flag
+                CCF                    ;and avoid unexpected SBC result
+                SBC     HL,BC          ;Test for our org
+                JR      NZ,MAPMEM4     ;Not our org, continue
+                LD      H,D            ;Restore HL to START from DE
+                LD      L,E
+                LD      BC,0800H       ;800H=SizeOfThisROM (2k)
+                ADD     HL,BC          ;Skip this ROM code
+                LD      D,H
+                LD      E,L
+MAPMEM2:        IN      A,(03H)        ;Get status
+                AND     01H            ;Mask out bit
+                JR      Z,MAPMEM2      ;Loop until ready
+                LD      A,'*'
+                OUT     (02H),A        ;Send
+MAPMEM3:        IN      A,(03H)        ;Get status
+                AND     01H            ;Mask out bit
+                JR      Z,MAPMEM3      ;Loop until ready
+                LD      A,'*'
+                OUT     (02H),A        ;Send
+MAPMEM4:
+                LD      H,D            ;Restore HL (START) from DE
+                LD      L,E
+                LD      BC,01FFH        ;Number of bytes to test in each 1k block
+                ADD     HL,BC          ;Find END
+                LD      B,H            ;BC=END
+                LD      C,L
+                LD      H,D            ;Restore HL=START
+                LD      L,E
+                EX      AF,AF'         ;Setup for calling TST1R5A
+                LD      A,035H          ;Test count offset
+                EX      AF,AF'
+                LD      E,05AH         ;->TST1R5A
+                LD      D,061H         ;->MAPR61
+                JR      RTE6
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+MAPMEV1:        JR      MAPMEM1
+RTE6UP1:        JR      RTE6
+RTE7DN1:        JR      RTE7DN2
+;MAPR62V:        JR      MAPR62
+;MAPR63V:        JR      MAPR63
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;----------------------------------------------------------
+MAPR61:
+                LD      A,B            ;Test result status 1=Error 0=Ok
+                CP      00H            ;Check for Ok
+                JR      NZ,MAPMEM5     ;Failed?
+                LD      C,'M'
+                JR      MAPMEM7
+MAPMEM5:
+                LD      A,000H
+                LD      (HL),A         ;Write 0 to START loc
+                LD      A,(HL)         ;Read START loc
+                CP      0FFH           ;Check for no memory
+                JR      NZ,MAPMEM6     ;
+                LD      C,'-'          ;No memory here
+                JR      MAPMEM7
+MAPMEM6:        LD      C,'?'          ;Bad memory, failed test
+
+MAPMEM7:        IN      A,(03H)        ;Get status
+                AND     01H            ;Mask out bit
+                JR      Z,MAPMEM7      ;Loop until ready
+                LD      A,C            ;Move result char to A
+                OUT     (02H),A        ;Send
+
+;DBG1
+;    LD D,062H
+;    LD E,012H ;P16HR12
+;    JR RTE6UP1
+;MAPR62:
+;    LD D,063H
+;    LD E,020H ;CRLFR20
+;    JR RTE6UP1
+;MAPR63:
+                LD      BC,0400H       ;Page size of 1k
+                ADD     HL,BC          ;Move HL (START) to next page
+
+                LD      A,H            ;Test MSB (Checking for end of 8k block)
+                AND     01FH           ;Mask for test
+                CP      00H
+                JR      NZ,MAPMEM9     ;Not end of 8k block, skip
+                LD      A,L
+                CP      00H
+                JR      NZ,MAPMEM9     ;Not end of 8k block, skip
+
+MAPMEM8:        IN      A,(03H)        ;Get status
+                AND     01H            ;Mask out bit
+                JR      Z,MAPMEM8      ;Loop until ready
+                LD      A,' '          ;Space between 8k blocks
+                OUT     (02H),A        ;Send
+
+MAPMEM9:
+                LD      A,H            ;Test MSB for !done
+                CP      00H
+                JR      NZ,MAPMEV1
+                LD      A,L            ;Test LSB for !done
+                CP      00H
+                JR      NZ,MAPMEV1
+                LD      D,026H         ;->GCMDR26 return route to GCMD
+                LD      E,020H         ;->CRLFR20 Send CR-LF
+                JR      RTE6UP1
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE6UP2:         JR      RTE6UP1
+RTE7DN2:         JR      RTE7DN3
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;-----------------------------------------------------------
+TESTR70:
+                EXX  ;Active 1
+                LD      D,071H         ;Return route
+                EXX  ;Active 0
+                LD      E,040H         ;->GADDR40 Get start & end
+                JR      RTE6UP2        ;Route
+TESTR71:                       ;GADDR40 Returns: HL'=StartAddr BC'=EndAddr
+;TST1R5A Needs: BC=END  HL=START  D/D'=ReturnRoute A'=TestType, Rtn: B=StatusOnRet
+
+                EX      AF,AF'         ;Setup for calling TST1R5A
+                LD      A,00H          ;Pass counter init to zero
+                EX      AF,AF'
+TESTAGN:
+
+                EXX  ;Active 1
+                LD      A,H
+                EXX  ;Active 0
+                LD      H,A            ;Move START from HL' to HL
+                EXX  ;Active 1
+                LD      A,L
+                EXX  ;Active 0
+                LD      L,A
+
+                EXX  ;Active 1
+                LD      A,B
+                EXX  ;Active 0
+                LD      B,A            ;Move END from BC' to BC
+                EXX  ;Active 1
+                LD      A,C
+                EXX  ;Active 0
+                LD      C,A
+
+                LD      E,05AH         ;->TST1R5A  Run the test
+                LD      D,072H         ;->GCMDR23
+                JR      RTE6UP2
+TESTR72:
+
+                ; Why? LD      C,A
+                LD      A,B            ;Test result status 1=Error 0=Ok
+                CP      00H            ;Check for Ok
+                JR      Z,TESTR74      ;OK?
+                
+                LD      SP,IX          ;Data org pointer
+                LD      HL,DERR        ;String offset
+                ADD     HL,SP          ;
+                LD      SP,IY          ;Reset SP for any code that expects it
+                LD      D,073H         ;ReturnRoute
+                LD      E,001H         ;->SOUTR01 print "ERROR@"
+                JR      RTE7           ;Do it
+TESTR73:
+                EXX  ;Active 1
+                LD      A,B
+                EXX  ;Active 0
+                LD      H,A            ;Move FailedAddr from BC' to HL
+                EXX  ;Active 1
+                LD      A,C
+                EXX  ;Active 0
+                LD      L,A
+
+                LD      D,023H         ;ReturnRoute -> GCMDR23
+                LD      E,012H         ;->P16HR12 print address
+                JR      RTE7           ;Do it
+
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE6UP3:        JR      RTE6UP2
+RTE7DN3:        JR      RTE7
+TESTR70A:       JR      TESTR70
+TESTR71A:       JR      TESTR71
+TESTR72A:       JR      TESTR72
+TESTR73A:       JR      TESTR73
+TESTAGN1:       JR      TESTAGN
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;-----------------------------------------------------------
+TESTR74:        ;Passed test
+                EX      AF,AF'         ;A'
+                INC     A              ;Inc pass count
+                EX      AF,AF'         ;A Normal
+                LD      SP,IX          ;Data org pointer
+                LD      HL,DPAS        ;String offset
+                ADD     HL,SP          ;
+                LD      SP,IY          ;Reset SP for any code that expects it
+                LD      D,075H         ;ReturnRoute
+                LD      E,001H         ;->SOUTR01 print "PASS"
+                JR      RTE7           ;Do it
+TESTR75:
+                EX      AF,AF'         ;A'
+                LD      L,A            ;Get pass count
+                EX      AF,AF'         ;A Normal
+                LD      D,076H         ;ReturnRoute -> TESTR76
+                LD      E,018H         ;->P8HR18 print count
+                JR      RTE7           ;Do it
+TESTR76:
+                LD      D,077H         ;ReturnRoute
+                LD      E,020H         ;->CRLFR20
+                JR      RTE7           ;Do it
+TESTR77:
+                IN      A,(03H)        ;Get status
+                AND     02H
+                JR      Z,TESTAGN1     ;Test Again
+                IN      A,(02H)        ;Discard input char
+                LD      E,023H         ;ReturnRoute -> GCMDR23
+                JR      RTE7           ;Do it
+;----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE7:           LD      A,E            ;Move route code into A
+                AND     080H           ;Mask off upper bits
+                CP      080H           ;8 or more go down?
+                JR      Z,RTE8DN       ;Yes, more then 7, route it down
+                LD      A,E            ;Restore route code
+                AND     0F0H           ;Mask off upper bits
+                CP      070H           ;7?
+                JR      NZ,RTE6UP3     ;No, #6 up
+                LD      A,E            ;Restore the route code in A
+                CP      070H           ;Test
+                JR      Z,TESTR70A     ;Match jump?
+                CP      071H           ;Test
+                JR      Z,TESTR71A     ;Match jump?
+                CP      072H           ;Test
+                JR      Z,TESTR72A     ;Match jump?
+                CP      073H           ;Test
+                JR      Z,TESTR73A     ;Match jump?
+                CP      074H           ;Test
+                JR      Z,TESTR74      ;Match jump?
+                CP      075H           ;Test
+                JR      Z,TESTR75      ;Match jump?
+                CP      076H           ;Test
+                JR      Z,TESTR76      ;Match jump?
+                CP      077H           ;Test
+                JR      Z,TESTR77      ;Match jump?
+                CP      078H           ;Test
+                JR      Z,IHEXR78      ;Match jump?
+                CP      079H           ;Test
+                JR      Z,IHEXR79      ;Match jump?
+                CP      07AH           ;Test
+                JR      Z,IHEXR7A      ;Match jump?
+                CP      07BH           ;Test
+                JR      Z,IHEXR7B      ;Match jump?
+                CP      07CH           ;Test
+                JR      Z,IHEXR7C      ;Match jump?
+                CP      07DH           ;Test
+                JR      Z,IHEXR7D      ;Match jump?
+                CP      07EH           ;Test
+                JR      Z,IHEXR7E      ;Match jump?
+                CP      07FH           ;Test
+                JR      Z,IHEXR7F      ;Match jump?
+                HALT
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;-----------------------------------------------------------
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+RTE7UP:         JR      RTE7
+RTE8DN:         HALT
+;RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+;-----------------------------------------------------------
+; A=Tmp
+; IHEX=Intel-HEX data load from console
+IHEXR78:
+                IN      A,(03H)        ;Get status byte
+                AND     02             ;Mask in status bit
+                JR      Z,IHEXR78      ;Again if not ready
+                IN      A,(02H)        ;Get char
+                CP      03H            ;^C?
+                JR      Z,IHEXEND
+                CP      ':'            ;Test for start record
+                JR      NZ,IHEXR78     ;Wrong char? Try again
+
+IHEXR7F:        LD      D,079H         ;Rtn route
+                LD      E,038H         ;->G8HR38
+                JR      RTE7UP           ;Get byte count returned in L
+IHEXR79:
+                LD      B,L            ;Save byte count in B
+                LD      C,L            ;Save in C for checksum
+                EXX  ;Active 1
+                LD      D,07AH         ;Rtn route
+                LD      E,032H         ;->G16HR32
+                JR      RTE7UP           ;Get address returned in HL
+IHEXR7A:
+                LD      A,H
+                EXX  ;Active 0
+                LD      H,A
+                ADD     A,C            ;Next in checksum
+                LD      C,A
+                EXX  ;Active 1
+                LD      A,L
+                EXX  ;Active 0
+                LD      L,A            ;Save address in HL
+                ADD     A,C            ;Next in checksum
+                LD      C,A
+                EXX  ;Active 1
+                LD      D,07BH         ;Rtn route
+                LD      E,038H         ;->G8HR38
+                JR      RTE7UP         ;Get record type returned in L
+IHEXR7B:
+                LD      A,L
+                EXX  ;Active 0
+                LD      E,A            ;Save type in E
+                ADD     A,C            ;Next in checksum
+                LD      C,A
+                LD      A,E            ;Restore type
+                CP      01H            ;Test for END of Intel-HEX records
+IHEXEND:        LD      E,023H         ;ReturnRoute -> GCMDR23
+                JR      Z,RTE7UP
+                CP      00H            ;Test for DATA type
+                JR      NZ,IHEXR78     ;Not data? Go wait for next record
+
+IHEXR7C:                             ;Read in data byte
+                EXX  ;Active 1
+                LD      D,07DH         ;Rtn route
+                LD      E,038H         ;->G8HR38
+                JR      RTE7UP         ;Get byte count returned in L
+IHEXR7D:
+                LD      A,L
+                EXX  ;Active 0
+                LD      (HL),A         ;Store received byte in address
+                ADD     A,C            ;Next in checksum
+                LD      C,A
+                INC     HL             ;Next location
+                DJNZ    IHEXR7C        ;More? Do it again.
+
+                EXX  ;Active 1
+                LD      D,07EH         ;Rtn route
+                LD      E,038H         ;->G8HR38
+                JR      RTE7UP           ;Get byte checksum in L
+IHEXR7E:
+                LD      A,L
+                EXX  ;Active 0
+                                       ;Here we have the sum in C and the checksum in A
+                LD      E,A            ;Save received checksum in E
+                LD      A,C            ;Move our sum into A
+                NEG                    ;Two's complement of A
+                CP      E              ;Compare checksum
+                JR      Z,IHEXR78      ;Go for next record
+
+                LD      SP,IX          ;Data org pointer
+                LD      HL,DERR        ;String offset
+                ADD     HL,SP          ;
+                LD      SP,IY          ;Reset SP for any code that expects it
+                LD      D,078H         ;ReturnRoute
+                LD      E,001H         ;->SOUTR01 print "ERROR@"
+                JR      RTE7UP         ;Do it
+   HALT
+DB 00H,00H,00H;
+END
