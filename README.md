@@ -9,7 +9,7 @@ Design requirements:
  
             1) No RAM, which includes no stack.
             2) Relative code, no fixed addressing.
-            3) Modified Z80 CPU uses ROM 2716, 2048 bytes max size
+            3) Modified Z80 CPU card uses ROM 2716, 2048 bytes max size
 
 Features:
 
