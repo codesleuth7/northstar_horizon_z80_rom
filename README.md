@@ -27,3 +27,7 @@ Assembler:
 
 Develment environment was Ubuntu using z80asm. No preprocesser in this version which
 should make it easier to port to other z80 assemblers.
+For example:
+
+           $ z80asm -onsz80rom.bin -lnsz80rom.lst nsz80rom.mac
+
