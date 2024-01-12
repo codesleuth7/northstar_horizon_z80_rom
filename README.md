@@ -2,7 +2,8 @@ The NorthStar Horizon is a S-100 bus Z80 computer from 1977. This ROM monitor
 was created as part of a restoration project. The initial need was a diagnostic
 to isolate and troubleshoot basic hardware problems. The minimum hardware
 required for this ROM was only the Z80 CPU and console serial port. Basic
-function without memory was a design goal to assist with memory troubleshooting.Memory from this era was a common source of failure for many retro computers.
+function without memory was a design goal to assist with memory troubleshooting.
+Memory from this era was a common source of failure for many retro computers.
 
 Design requirements:
  
@@ -24,4 +25,5 @@ Features:
 
 Assembler:
 
-Develment environment was Ubuntu using z80asm. 
+Develment environment was Ubuntu using z80asm. No preprocesser in this version which
+should make it easier to port to other z80 assemblers.
