@@ -31,3 +31,6 @@ For example:
 
            $ z80asm -onsz80rom.bin -lnsz80rom.lst nsz80rom.mac
 
+This ROM image will work at any address, but I selected F000, above the disk controller.
+If your memory overlaps the ROM location, look for a configuration option to deselect the overlap.
+The deselect is also used for the floppy controller at address E800.
