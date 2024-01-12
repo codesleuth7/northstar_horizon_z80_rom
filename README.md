@@ -7,7 +7,7 @@ Memory from this era was a common source of failure for many retro computers.
 
 Design requirements:
  
-            1) No RAM memory, which includes no stack.
+            1) No RAM, which includes no stack.
             2) Relative code, no fixed addressing.
             3) Modified Z80 CPU uses ROM 2716, 2048 bytes max size
 
